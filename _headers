@@ -1,0 +1,54 @@
+# _headers — Budget Reference Tables (v1.2.7+)
+# Works on Cloudflare Pages and Netlify (same syntax). Put this file in the
+# ROOT of the deployed folder, next to index.html. It is not served to visitors.
+# GitHub Pages ignores it.
+#
+# Rules for editing:
+#  - Cache-Control is set ONLY in the path-specific blocks below, never in /*.
+#    On Cloudflare Pages, headers from every matching rule are merged, so a
+#    Cache-Control in /* would be appended to the specific one and conflict.
+#  - The CSP below mirrors the <meta> CSP in index.html (keep both; the meta
+#    one also covers file:// use). Browsers apply both and take the stricter.
+#    The header adds what a <meta> tag cannot do: frame-ancestors.
+#  - If you later vendor Dexie and Font Awesome, remove cdn.jsdelivr.net and
+#    cdnjs.cloudflare.com from script-src / style-src / font-src here AND in
+#    index.html's meta tag, AND from RUNTIME_ORIGINS in sw.js.
+#  - If you later remove inline onclick/oninput handlers, drop 'unsafe-inline'
+#    from script-src.
+
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src https://cdnjs.cloudflare.com; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; upgrade-insecure-requests
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=(), interest-cohort=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Strict-Transport-Security: max-age=31536000
+  X-Robots-Tag: noindex, nofollow
+
+# --- Caching -----------------------------------------------------------
+# App shell + service worker: always revalidate, so a new deploy is picked up
+# immediately and sw.js is never served stale (a stale sw.js = users stuck on
+# an old version). Remember to bump VERSION in sw.js on every deploy.
+
+/
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+/sw.js
+  Cache-Control: no-cache
+
+/manifest.json
+  Cache-Control: no-cache
+
+# Vendored library and icons: change rarely. One day, then revalidate.
+# (Do NOT use "immutable": the file names are not versioned.)
+
+/lib/*
+  Cache-Control: public, max-age=86400, must-revalidate
+
+/icons/*
+  Cache-Control: public, max-age=86400, must-revalidate
