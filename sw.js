@@ -9,7 +9,7 @@
 //    sees user data — the app's own data lives in IndexedDB inside the page,
 //    and (per the page's CSP) never leaves the device over the network.
 
-const VERSION = 'v1.2.7'; // bump this on every deploy that changes cached files —
+const VERSION = 'v1.2.8'; // bump this on every deploy that changes cached files —
 // forces the browser to install a fresh Service Worker, discard old caches
 // (see activate() below), and re-fetch everything instead of serving stale
 // precached copies of index.html/sw.js forever.
@@ -89,7 +89,7 @@ async function cacheFirst(request) {
 // Stale-while-revalidate for third-party CDN assets: serve from cache
 // immediately if we have it, and refresh the cache in the background so the
 // next load picks up updates.
-async function staleWhileRevalidate(request) {
+async function staleWhileRevalidate(request, event) {
   const cache = await caches.open(RUNTIME_CACHE);
   const cached = await cache.match(request);
   // Plain (CORS-mode) fetch — NOT { mode: 'no-cors' }. Both jsDelivr and
@@ -104,7 +104,11 @@ async function staleWhileRevalidate(request) {
   // was never wrong.
   const networkFetch = fetch(request)
     .then((response) => {
-      cache.put(request, response.clone());
+      // only cache good responses: a 404/5xx must never replace a working copy
+      if (response.ok) {
+        const putting = cache.put(request, response.clone()).catch(() => {});
+        if (event) event.waitUntil(putting); // keep the worker alive until the write lands
+      }
       return response;
     })
     .catch(() => cached); // offline and nothing new — fall back to what we had
@@ -118,7 +122,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
 
   if (isRuntimeAsset(url)) {
-    event.respondWith(staleWhileRevalidate(request));
+    event.respondWith(staleWhileRevalidate(request, event));
     return;
   }
 

@@ -28,7 +28,7 @@
 
 ## 🚀 部署到 GitHub Pages
 
-1. 新建一个 GitHub 仓库，把本目录下的所有文件（`index.html`、`manifest.json`、`sw.js`、`icons/`）上传到仓库根目录（或某个子目录，只要相对路径关系保持不变）。
+1. 新建一个 GitHub 仓库，把本目录下的所有文件（`index.html`、`manifest.json`、`sw.js`、`lib/`、`icons/`）上传到仓库根目录（或某个子目录，只要相对路径关系保持不变）。
 2. 仓库 **Settings → Pages**，Source 选择对应分支（如 `main`）和目录（`/root` 或 `/docs`），保存。
 3. 等待几分钟，访问 GitHub 给出的 `https://<你的用户名>.github.io/<仓库名>/` 地址即可。
 4. 用手机浏览器打开该地址后，选择"添加到主屏幕"（iOS Safari）或浏览器会自动提示"安装应用"（Android Chrome），即可像原生 App 一样使用，并支持离线打开。

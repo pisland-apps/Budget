@@ -637,8 +637,8 @@
   // Bump CACHE_VERSION in sw.js too when you bump this (they live in
   // different files and don't sync automatically) — sw.js has a matching
   // reminder comment pointing back here.
-  const APP_VERSION = 'v1.2.7';
-  const APP_VERSION_DATE = '2026-08-28';
+  const APP_VERSION = 'v1.2.8';
+  const APP_VERSION_DATE = '2026-10-06';
   document.getElementById('version-badge').textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
   // ========== DB SETUP ==========
@@ -714,6 +714,10 @@
     mypActuals: '++id, planId, year',
     mypSavedForecasts: '++id, planId'
   });
+
+  // v5 — encMeta: plain (non-secret) copy of the encryption salt / iteration
+  // count / canary, so a localStorage-only wipe cannot orphan encrypted rows.
+  db.version(5).stores({ encMeta: 'key' });
 
   let pendingImportData = null;
   let pendingEncryptedImport = null; // raw {salt, enc} payload from a picked file, awaiting its passcode
@@ -831,10 +835,12 @@
     return row ? decryptRecord(row) : row;
   }
   async function encAdd(table, obj) {
+    if (isWriteLocked()) throw new Error(LOCKED_WRITE_ERROR);
     const encoded = await encryptRecord(table, obj);
     return db[table].add(encoded);
   }
   async function encUpdate(table, id, changes) {
+    if (isWriteLocked()) throw new Error(LOCKED_WRITE_ERROR);
     if (!encryptionKey) return db[table].update(id, changes);
     const existing = await encGet(table, id);
     const merged = Object.assign({}, existing, changes);
@@ -874,7 +880,7 @@
   // no future write path can silently persist plaintext (or delete data)
   // while locked just by forgetting to check isWriteLocked() itself.
   const LOCKED_WRITE_ERROR = 'LOCKED_WRITE: cannot write while encryption is enabled but locked';
-  ['fixedExpenses', 'policies', 'policyRanges', 'paidMarks'].forEach((table) => {
+  [...ENC_TABLES, 'paidMarks'].forEach((table) => {
     db[table].hook('creating', () => { if (isWriteLocked()) throw new Error(LOCKED_WRITE_ERROR); });
     db[table].hook('updating', () => { if (isWriteLocked()) throw new Error(LOCKED_WRITE_ERROR); });
     db[table].hook('deleting', () => { if (isWriteLocked()) throw new Error(LOCKED_WRITE_ERROR); });
@@ -906,12 +912,35 @@
   const AUTO_LOCK_IDLE_MS = 5 * 60 * 1000;
   let autoLockTimer = null;
   let autoLockListenersAttached = false;
-  function lockNow() {
-    if (!isEncryptionEnabled()) return;
-    encryptionKey = null;
+  let lockingInProgress = false;
+  // Remove decrypted content from the page, not just hide it behind the overlay.
+  function clearSensitiveDom() {
+    if (mypChart) { mypChart.destroy(); mypChart = null; }
+    mypForecastData = [];
+    pendingImportData = null;
+    pendingEncryptedImport = null;
+    ['fixed-tbody','fixed-report-container','policies-container','ins-summary-grid','forecasts-container',
+     'myp-funds-tbody','myp-rules-tbody','myp-income-container','myp-expense-container',
+     'mypSummaryCards','mypSnapshotCards','mypSnapshotYear','mypForecastTableHead','mypForecastTableBody',
+     'mypBaselineTableHead','mypBaselineTableBody','mypPlanSelect','category-datalist'
+    ].forEach((id) => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+    const wrap = document.getElementById('mypChartWrap'); if (wrap) wrap.style.display = 'none';
+    document.querySelectorAll('.container input, .container textarea').forEach((el) => {
+      if (el.type !== 'file') el.value = '';
+    });
+  }
+  async function lockNow() {
+    if (!isEncryptionEnabled() || lockingInProgress) return;
+    lockingInProgress = true;
+    clearTimeout(autoLockTimer);
     document.getElementById('unlock-passcode').value = '';
     document.getElementById('unlock-status').textContent = '';
-    showUnlockOverlay();
+    showUnlockOverlay(); // hide the UI immediately...
+    try { await flushPendingSaves(); } catch (e) { /* allSettled never rejects */ }
+    // ...then, with in-flight edits saved, drop the key and the decrypted DOM.
+    encryptionKey = null;
+    clearSensitiveDom();
+    lockingInProgress = false;
   }
   function resetAutoLockTimer() {
     if (!isEncryptionEnabled() || encryptionKey === null) return;
@@ -937,7 +966,8 @@
     //      restore the page (with the decryption key still sitting in JS
     //      memory) without asking for the passcode again.
     window.addEventListener('pagehide', () => {
-      if (isEncryptionEnabled()) encryptionKey = null;
+      // save in-flight edits while the key is still loaded, then drop it
+      flushPendingSaves().finally(() => { if (isEncryptionEnabled()) encryptionKey = null; });
     });
     window.addEventListener('pageshow', (e) => {
       if (e.persisted && isEncryptionEnabled()) lockNow();
@@ -982,6 +1012,7 @@
       localStorage.setItem('budgetref-encryption-iterations', String(iterations));
       localStorage.setItem('budgetref-encryption-canary', JSON.stringify(canary));
       localStorage.setItem('budgetref-encryption-enabled', 'true');
+      await mirrorEncMeta();
       closeEncryptionModal();
       updateEncNavBtn();
       showToast('🔒 Encryption enabled — your data is now encrypted at rest');
@@ -1022,6 +1053,7 @@
       localStorage.removeItem('budgetref-encryption-iterations');
       localStorage.removeItem('budgetref-encryption-canary');
       localStorage.removeItem('budgetref-encryption-enabled');
+      try { await db.encMeta.clear(); } catch (e) { /* non-fatal */ }
       closeEncryptionModal();
       updateEncNavBtn();
       showToast('🔓 Encryption disabled — your data is stored as plaintext again');
@@ -1035,6 +1067,36 @@
     }
   }
 
+  // ---- Step 5: plain mirror of key material in IndexedDB (salt/iterations/canary are not secret) ----
+  const ENC_META_KEYS = {
+    salt: 'budgetref-encryption-salt',
+    iterations: 'budgetref-encryption-iterations',
+    canary: 'budgetref-encryption-canary'
+  };
+  async function mirrorEncMeta() {
+    try {
+      const rows = [];
+      for (const [k, ls] of Object.entries(ENC_META_KEYS)) {
+        const v = localStorage.getItem(ls);
+        if (v != null) rows.push({ key: k, value: v });
+      }
+      if (rows.length) await db.encMeta.bulkPut(rows);
+    } catch (e) { console.warn('encMeta mirror failed', e); }
+  }
+  async function restoreEncMetaIfLost() {
+    try {
+      const intact = localStorage.getItem('budgetref-encryption-enabled') === 'true'
+        && localStorage.getItem(ENC_META_KEYS.salt) && localStorage.getItem(ENC_META_KEYS.canary);
+      if (intact) return;
+      const m = Object.fromEntries((await db.encMeta.toArray()).map((r) => [r.key, r.value]));
+      if (!m.salt || !m.canary) return;
+      localStorage.setItem(ENC_META_KEYS.salt, m.salt);
+      localStorage.setItem(ENC_META_KEYS.canary, m.canary);
+      if (m.iterations) localStorage.setItem(ENC_META_KEYS.iterations, m.iterations);
+      localStorage.setItem('budgetref-encryption-enabled', 'true');
+    } catch (e) { console.warn('encMeta restore failed', e); }
+  }
+
   function showUnlockOverlay() {
     document.documentElement.classList.add('locked-boot'); // hides .container, forces full-screen overlay
     document.getElementById('unlock-overlay').classList.add('show');
@@ -1045,6 +1107,7 @@
     document.documentElement.classList.remove('locked-boot');
   }
   async function attemptUnlock() {
+    if (lockingInProgress) return;
     const passcode = document.getElementById('unlock-passcode').value;
     const status = document.getElementById('unlock-status');
     if (!passcode) { status.textContent = 'Enter your passcode.'; return; }
@@ -1058,6 +1121,7 @@
       if (decoded !== ENC_CANARY_PLAINTEXT) throw new Error('wrong passcode');
       encryptionKey = key;
       hideUnlockOverlay();
+      mirrorEncMeta();
       await renderFixedTable();
       await renderInsTable();
       await renderForecasts();
@@ -1145,10 +1209,37 @@
     clearTimeout(showToast._timer);
     showToast._timer = setTimeout(() => t.classList.remove('show'), 2200);
   }
+  // Debounce keyed per (id, field): editing field A then field B (or another
+  // row) inside the delay no longer cancels A's save. Pending and in-flight
+  // saves are tracked so they can be flushed on lock / page hide.
+  const pendingSaves = new Map();
+  const inflightSaves = new Set();
+  let debounceSeq = 0;
   function debounce(fn, ms) {
-    let timer;
-    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+    const fid = ++debounceSeq;
+    return (...args) => {
+      const key = fid + ':' + args[0] + ':' + args[1];
+      const prev = pendingSaves.get(key);
+      if (prev) clearTimeout(prev.timer);
+      const run = () => {
+        pendingSaves.delete(key);
+        const p = Promise.resolve().then(() => fn(...args));
+        inflightSaves.add(p);
+        p.then(() => { inflightSaves.delete(p); },
+               (e) => { inflightSaves.delete(p); return Promise.reject(e); }); // keep LOCKED_WRITE handler working
+        return p;
+      };
+      pendingSaves.set(key, { timer: setTimeout(run, ms), run });
+    };
   }
+  function flushPendingSaves() {
+    for (const [, save] of [...pendingSaves]) { clearTimeout(save.timer); save.run(); }
+    return Promise.allSettled([...inflightSaves]);
+  }
+  window.addEventListener('pagehide', () => { flushPendingSaves(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPendingSaves();
+  });
 
   // ========== FIXED EXPENSES TABLE ==========
   function sortRowsByCategory(rows) {
@@ -2449,6 +2540,104 @@
     pendingImportData = null;
   }
 
+  // ---- import validation: coerce numeric fields, clamp years, drop non-object rows ----
+  function importNum(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+  function importYear(v) {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.min(2200, Math.max(1900, n)) : new Date().getFullYear();
+  }
+  function importRows(x) { return Array.isArray(x) ? x.filter((r) => r && typeof r === 'object' && !Array.isArray(r)) : []; }
+  const IMPORT_FIELD_RULES = {
+    fixedExpenses: { num: ['monthlyAmt', 'freq'] },
+    policyRanges: { num: ['amount'], year: ['fromYear', 'toYear'] },
+    paidMarks: { year: ['year'] },
+    forecastLines: { num: ['amount', 'ratePct'] },
+    mypFunds: { num: ['initialAmount', 'returnRate'] },
+    mypFundRules: { num: ['priority', 'allocationPct'], year: ['startYear', 'endYear'] },
+    mypIncomeRanges: { num: ['amount'], year: ['startYear', 'endYear'] },
+    mypExpenseRanges: { num: ['amount'], year: ['startYear', 'endYear'] },
+    mypBaselineValues: { num: ['amount'], year: ['year'] },
+    mypActuals: { num: ['amount'], year: ['year'] }
+  };
+  function cleanRow(table, row) {
+    const r = { ...row };
+    const rule = IMPORT_FIELD_RULES[table] || {};
+    (rule.num || []).forEach((k) => { if (k in r) r[k] = importNum(r[k]); });
+    (rule.year || []).forEach((k) => { if (k in r) r[k] = importYear(r[k]); });
+    return r;
+  }
+  // Builds every row in memory with explicit sequential ids and remapped foreign
+  // keys, so the DB write can be a single atomic transaction of plain IndexedDB ops.
+  function buildImportRows(d) {
+    const out = {};
+    const put = (table, row) => {
+      const arr = out[table] || (out[table] = []);
+      const id = arr.length + 1;
+      arr.push({ ...cleanRow(table, row), id });
+      return id;
+    };
+    const fk = (map, v) => map[v] ?? importNum(v);
+
+    for (const r of importRows(d.fixedExpenses)) { const { id, ...rest } = r; put('fixedExpenses', rest); }
+
+    if (Array.isArray(d.policies)) {
+      const idMap = {};
+      for (const p of importRows(d.policies)) {
+        const { id, ...rest } = p;
+        const newId = put('policies', rest);
+        if (id != null) idMap[id] = newId;
+      }
+      for (const r of importRows(d.policyRanges)) { const { id, policyId, ...rest } = r; put('policyRanges', { ...rest, policyId: fk(idMap, policyId) }); }
+      for (const m of importRows(d.paidMarks)) { const { id, policyId, ...rest } = m; put('paidMarks', { ...rest, policyId: fk(idMap, policyId) }); }
+    } else if (Array.isArray(d.insurancePolicies)) {
+      // legacy (one row per policy per year) format — group into policies + merged year-ranges
+      const byName = {};
+      for (const r of importRows(d.insurancePolicies)) {
+        const name = String(r.policyName || '');
+        if (!byName[name]) byName[name] = [];
+        byName[name].push({ year: r.year ? importYear(r.year) : 0, amount: importNum(r.amount), note: String(r.note || '') });
+      }
+      for (const name of Object.keys(byName)) {
+        const rows = byName[name].sort((a, b) => a.year - b.year);
+        const policyId = put('policies', { name, note: '' });
+        let i = 0;
+        while (i < rows.length) {
+          let j = i;
+          while (j + 1 < rows.length && rows[j+1].year === rows[j].year + 1 && rows[j+1].amount === rows[i].amount) j++;
+          put('policyRanges', { policyId, fromYear: rows[i].year, toYear: rows[j].year, amount: rows[i].amount, note: rows[i].note || '' });
+          i = j + 1;
+        }
+      }
+    }
+
+    if (Array.isArray(d.incomeForecasts)) {
+      const forecastIdMap = {};
+      for (const f of importRows(d.incomeForecasts)) {
+        const { id, ...rest } = f;
+        const newId = put('incomeForecasts', rest);
+        if (id != null) forecastIdMap[id] = newId;
+      }
+      for (const l of importRows(d.forecastLines)) { const { id, forecastId, ...rest } = l; put('forecastLines', { ...rest, forecastId: fk(forecastIdMap, forecastId) }); }
+    }
+
+    if (Array.isArray(d.mypPlans)) {
+      const planIdMap = {}, fundIdMap = {}, incomeCatIdMap = {}, expenseCatIdMap = {}, baselineIdMap = {};
+      for (const p of importRows(d.mypPlans)) { const { id, ...rest } = p; const n = put('mypPlans', rest); if (id != null) planIdMap[id] = n; }
+      for (const f of importRows(d.mypFunds)) { const { id, planId, ...rest } = f; const n = put('mypFunds', { ...rest, planId: fk(planIdMap, planId) }); if (id != null) fundIdMap[id] = n; }
+      for (const r of importRows(d.mypFundRules)) { const { id, fundId, ...rest } = r; put('mypFundRules', { ...rest, fundId: fk(fundIdMap, fundId) }); }
+      for (const c of importRows(d.mypIncomeCategories)) { const { id, planId, ...rest } = c; const n = put('mypIncomeCategories', { ...rest, planId: fk(planIdMap, planId) }); if (id != null) incomeCatIdMap[id] = n; }
+      for (const r of importRows(d.mypIncomeRanges)) { const { id, categoryId, ...rest } = r; put('mypIncomeRanges', { ...rest, categoryId: fk(incomeCatIdMap, categoryId) }); }
+      for (const c of importRows(d.mypExpenseCategories)) { const { id, planId, ...rest } = c; const n = put('mypExpenseCategories', { ...rest, planId: fk(planIdMap, planId) }); if (id != null) expenseCatIdMap[id] = n; }
+      for (const r of importRows(d.mypExpenseRanges)) { const { id, categoryId, ...rest } = r; put('mypExpenseRanges', { ...rest, categoryId: fk(expenseCatIdMap, categoryId) }); }
+      for (const b of importRows(d.mypBaselines)) { const { id, planId, ...rest } = b; const n = put('mypBaselines', { ...rest, planId: fk(planIdMap, planId) }); if (id != null) baselineIdMap[id] = n; }
+      for (const v of importRows(d.mypBaselineValues)) { const { id, baselineId, ...rest } = v; put('mypBaselineValues', { ...rest, baselineId: fk(baselineIdMap, baselineId) }); }
+      for (const a of importRows(d.mypActuals)) { const { id, planId, ...rest } = a; put('mypActuals', { ...rest, planId: fk(planIdMap, planId) }); }
+      // saved forecast snapshots are self-contained blobs; only the plan FK is remapped
+      for (const s2 of importRows(d.mypSavedForecasts)) { const { id, planId, ...rest } = s2; put('mypSavedForecasts', { ...rest, planId: fk(planIdMap, planId) }); }
+    }
+    return out;
+  }
+
   async function confirmImport() {
     if (!pendingImportData) return;
     if (isWriteLocked()) {
@@ -2457,143 +2646,28 @@
       showUnlockOverlay();
       return;
     }
-    await db.fixedExpenses.clear();
-    await db.policies.clear();
-    await db.policyRanges.clear();
-    await db.paidMarks.clear();
-    await db.incomeForecasts.clear();
-    await db.forecastLines.clear();
-    await db.mypPlans.clear();
-    await db.mypFunds.clear();
-    await db.mypFundRules.clear();
-    await db.mypIncomeCategories.clear();
-    await db.mypIncomeRanges.clear();
-    await db.mypExpenseCategories.clear();
-    await db.mypExpenseRanges.clear();
-    await db.mypBaselines.clear();
-    await db.mypBaselineValues.clear();
-    await db.mypActuals.clear();
-    await db.mypSavedForecasts.clear();
-
-    if (pendingImportData.fixedExpenses) {
-      for (const r of pendingImportData.fixedExpenses) {
-        const { id, ...rest } = r;
-        await encAdd('fixedExpenses', rest);
+    const ALL_IMPORT_TABLES = [...ENC_TABLES, 'paidMarks'];
+    try {
+      // 1. safety net: download a backup of what is about to be replaced
+      const counts = await Promise.all(ALL_IMPORT_TABLES.map((t) => db[t].count()));
+      if (counts.some((c) => c > 0)) await exportJSON();
+      // 2. build + validate + encrypt everything in memory (no DB writes yet)
+      const out = buildImportRows(pendingImportData);
+      for (const t of ENC_TABLES) {
+        if (out[t]) out[t] = await Promise.all(out[t].map((r) => encryptRecord(t, r)));
       }
-    }
-
-    if (pendingImportData.policies) {
-      // current (grouped-by-policy) format
-      const idMap = {};
-      for (const p of pendingImportData.policies) {
-        const { id, ...rest } = p;
-        const newId = await encAdd('policies', rest);
-        if (id != null) idMap[id] = newId;
-      }
-      for (const r of (pendingImportData.policyRanges || [])) {
-        const { id, policyId, ...rest } = r;
-        await encAdd('policyRanges', { ...rest, policyId: idMap[policyId] ?? policyId });
-      }
-      for (const m of (pendingImportData.paidMarks || [])) {
-        const { id, policyId, ...rest } = m;
-        await db.paidMarks.add({ ...rest, policyId: idMap[policyId] ?? policyId });
-      }
-    } else if (pendingImportData.insurancePolicies) {
-      // legacy (one row per policy per year) format — group into policies + merged year-ranges
-      const byName = {};
-      for (const r of pendingImportData.insurancePolicies) {
-        const name = r.policyName || '';
-        if (!byName[name]) byName[name] = [];
-        byName[name].push({ year: r.year || 0, amount: r.amount || 0, note: r.note || '' });
-      }
-      for (const name of Object.keys(byName)) {
-        const rows = byName[name].sort((a,b) => a.year - b.year);
-        const policyId = await encAdd('policies', { name, note:'' });
-        let i = 0;
-        while (i < rows.length) {
-          let j = i;
-          while (j + 1 < rows.length && rows[j+1].year === rows[j].year + 1 && rows[j+1].amount === rows[i].amount) j++;
-          await encAdd('policyRanges', { policyId, fromYear: rows[i].year, toYear: rows[j].year, amount: rows[i].amount, note: rows[i].note || '' });
-          i = j + 1;
+      // 3. replace everything in ONE transaction: all-or-nothing
+      await db.transaction('rw', ALL_IMPORT_TABLES.map((t) => db[t]), async () => {
+        for (const t of ALL_IMPORT_TABLES) {
+          await db[t].clear();
+          if (out[t] && out[t].length) await db[t].bulkAdd(out[t]);
         }
-      }
-    }
-
-    // Income Forecast (scenarios -> their lines)
-    if (pendingImportData.incomeForecasts) {
-      const forecastIdMap = {};
-      for (const f of pendingImportData.incomeForecasts) {
-        const { id, ...rest } = f;
-        const newId = await encAdd('incomeForecasts', rest);
-        if (id != null) forecastIdMap[id] = newId;
-      }
-      for (const l of (pendingImportData.forecastLines || [])) {
-        const { id, forecastId, ...rest } = l;
-        await encAdd('forecastLines', { ...rest, forecastId: forecastIdMap[forecastId] ?? forecastId });
-      }
-    }
-
-    // Multi-Year Planner (plans -> everything scoped to a plan, chained through their own foreign keys)
-    if (pendingImportData.mypPlans) {
-      const planIdMap = {};
-      for (const p of pendingImportData.mypPlans) {
-        const { id, ...rest } = p;
-        const newId = await encAdd('mypPlans', rest);
-        if (id != null) planIdMap[id] = newId;
-      }
-      const fundIdMap = {};
-      for (const f of (pendingImportData.mypFunds || [])) {
-        const { id, planId, ...rest } = f;
-        const newId = await encAdd('mypFunds', { ...rest, planId: planIdMap[planId] ?? planId });
-        if (id != null) fundIdMap[id] = newId;
-      }
-      for (const r of (pendingImportData.mypFundRules || [])) {
-        const { id, fundId, ...rest } = r;
-        await encAdd('mypFundRules', { ...rest, fundId: fundIdMap[fundId] ?? fundId });
-      }
-      const incomeCatIdMap = {};
-      for (const c of (pendingImportData.mypIncomeCategories || [])) {
-        const { id, planId, ...rest } = c;
-        const newId = await encAdd('mypIncomeCategories', { ...rest, planId: planIdMap[planId] ?? planId });
-        if (id != null) incomeCatIdMap[id] = newId;
-      }
-      for (const r of (pendingImportData.mypIncomeRanges || [])) {
-        const { id, categoryId, ...rest } = r;
-        await encAdd('mypIncomeRanges', { ...rest, categoryId: incomeCatIdMap[categoryId] ?? categoryId });
-      }
-      const expenseCatIdMap = {};
-      for (const c of (pendingImportData.mypExpenseCategories || [])) {
-        const { id, planId, ...rest } = c;
-        const newId = await encAdd('mypExpenseCategories', { ...rest, planId: planIdMap[planId] ?? planId });
-        if (id != null) expenseCatIdMap[id] = newId;
-      }
-      for (const r of (pendingImportData.mypExpenseRanges || [])) {
-        const { id, categoryId, ...rest } = r;
-        await encAdd('mypExpenseRanges', { ...rest, categoryId: expenseCatIdMap[categoryId] ?? categoryId });
-      }
-      const baselineIdMap = {};
-      for (const b of (pendingImportData.mypBaselines || [])) {
-        const { id, planId, ...rest } = b;
-        const newId = await encAdd('mypBaselines', { ...rest, planId: planIdMap[planId] ?? planId });
-        if (id != null) baselineIdMap[id] = newId;
-      }
-      for (const v of (pendingImportData.mypBaselineValues || [])) {
-        const { id, baselineId, ...rest } = v;
-        await encAdd('mypBaselineValues', { ...rest, baselineId: baselineIdMap[baselineId] ?? baselineId });
-      }
-      for (const a of (pendingImportData.mypActuals || [])) {
-        const { id, planId, ...rest } = a;
-        await encAdd('mypActuals', { ...rest, planId: planIdMap[planId] ?? planId });
-      }
-      // tableData/fundsList inside each saved snapshot are a self-contained,
-      // frozen-in-time blob keyed by the *original* fund ids — those keys
-      // only ever need to agree with each other (they do, since both came
-      // from the same export), not with the freshly remapped fundIdMap
-      // above, so only the plan-scoping foreign key needs remapping here.
-      for (const s of (pendingImportData.mypSavedForecasts || [])) {
-        const { id, planId, ...rest } = s;
-        await encAdd('mypSavedForecasts', { ...rest, planId: planIdMap[planId] ?? planId });
-      }
+      });
+    } catch (e) {
+      console.error('Import failed', e);
+      closeImportModal();
+      showToast('❌ Import failed — your existing data was not changed');
+      return;
     }
 
     closeImportModal();
@@ -2607,6 +2681,7 @@
   // ========== INIT ==========
   (async function init() {
     initTheme();
+    await restoreEncMetaIfLost();
     updateEncNavBtn();
     if (isEncryptionEnabled()) {
       showUnlockOverlay(); // data stays locked until a correct passcode is entered
