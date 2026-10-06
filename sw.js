@@ -9,7 +9,7 @@
 //    sees user data — the app's own data lives in IndexedDB inside the page,
 //    and (per the page's CSP) never leaves the device over the network.
 
-const VERSION = 'v1.2.8'; // bump this on every deploy that changes cached files —
+const VERSION = 'v1.2.9'; // bump this on every deploy that changes cached files —
 // forces the browser to install a fresh Service Worker, discard old caches
 // (see activate() below), and re-fetch everything instead of serving stale
 // precached copies of index.html/sw.js forever.
@@ -24,6 +24,8 @@ const RUNTIME_CACHE = `budgetref-runtime-${VERSION}`;
 const SHELL_URLS = [
   './',
   './index.html',
+  './app.js',
+  './boot.js',
   './manifest.json',
   './lib/chart.umd.min.js',
   './icons/icon-72.png',

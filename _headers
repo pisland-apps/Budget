@@ -13,11 +13,11 @@
 #  - If you later vendor Dexie and Font Awesome, remove cdn.jsdelivr.net and
 #    cdnjs.cloudflare.com from script-src / style-src / font-src here AND in
 #    index.html's meta tag, AND from RUNTIME_ORIGINS in sw.js.
-#  - If you later remove inline onclick/oninput handlers, drop 'unsafe-inline'
-#    from script-src.
+#  - v1.2.9 removed all inline scripts/handlers (code lives in app.js + boot.js),
+#    so script-src has no 'unsafe-inline'. style-src still needs it (inline style="").
 
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src https://cdnjs.cloudflare.com; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; upgrade-insecure-requests
+  Content-Security-Policy: default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src https://cdnjs.cloudflare.com; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; upgrade-insecure-requests
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Referrer-Policy: no-referrer

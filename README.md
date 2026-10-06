@@ -21,6 +21,8 @@
 .
 ├── index.html          # 应用主体（原 budget-reference.html）
 ├── manifest.json        # Web App Manifest
+├── app.js                # 全部应用脚本（原先内联在 index.html 里）
+├── boot.js               # 启动时先执行的小脚本（锁屏闪烁防护）
 ├── sw.js                 # Service Worker（离线缓存）
 ├── lib/                  # 本地托管的第三方库（chart.umd.min.js，用于多年度规划的图表，无需 CDN）
 └── icons/                # 各尺寸图标（含 maskable 版本、favicon、apple-touch-icon）
@@ -28,7 +30,7 @@
 
 ## 🚀 部署到 GitHub Pages
 
-1. 新建一个 GitHub 仓库，把本目录下的所有文件（`index.html`、`manifest.json`、`sw.js`、`lib/`、`icons/`）上传到仓库根目录（或某个子目录，只要相对路径关系保持不变）。
+1. 新建一个 GitHub 仓库，把本目录下的所有文件（`index.html`、`app.js`、`boot.js`、`manifest.json`、`sw.js`、`lib/`、`icons/`）上传到仓库根目录（或某个子目录，只要相对路径关系保持不变）。
 2. 仓库 **Settings → Pages**，Source 选择对应分支（如 `main`）和目录（`/root` 或 `/docs`），保存。
 3. 等待几分钟，访问 GitHub 给出的 `https://<你的用户名>.github.io/<仓库名>/` 地址即可。
 4. 用手机浏览器打开该地址后，选择"添加到主屏幕"（iOS Safari）或浏览器会自动提示"安装应用"（Android Chrome），即可像原生 App 一样使用，并支持离线打开。
