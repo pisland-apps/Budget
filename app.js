@@ -7,7 +7,7 @@
   // Bump CACHE_VERSION in sw.js too when you bump this (they live in
   // different files and don't sync automatically) — sw.js has a matching
   // reminder comment pointing back here.
-  const APP_VERSION = 'v1.2.9';
+  const APP_VERSION = 'v1.3.1';
   const APP_VERSION_DATE = '2026-10-06';
   document.getElementById('version-badge').textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
@@ -1580,6 +1580,7 @@
 
       const surplus = yearIncome - yearExpense;
       const fundFlows = [];
+      let uncovered = 0;   // part of a deficit that no account could cover
       if (surplus >= 0) {
         yearRules.forEach(f => {
           const add = surplus * allocWeights[f.id];
@@ -1596,6 +1597,7 @@
           deficit -= deduct;
           if (deduct > 0) fundFlows.push(`${escapeAttr(f.name)}: -${formatMoney(deduct)} (P${f.priority})`);
         }
+        uncovered = Math.max(0, deficit);
       }
 
       let yearInterest = 0;
@@ -1610,7 +1612,7 @@
       summary.totalExpense += yearExpense;
       summary.totalInterest += yearInterest;
 
-      tableData.push({ year, income: yearIncome, expense: yearExpense, balance: surplus, interest: yearInterest, fundBalances: { ...currentBalances }, totalAllFunds, fundFlows, incomeDetail, expenseDetail });
+      tableData.push({ year, income: yearIncome, expense: yearExpense, balance: surplus, interest: yearInterest, uncovered, fundBalances: { ...currentBalances }, totalAllFunds, fundFlows, incomeDetail, expenseDetail });
     }
 
     mypForecastData = tableData;
@@ -1626,12 +1628,33 @@
   // (mypRunForecast) and restoring a previously saved snapshot.
   function mypRenderForecastOutputs(summary, funds, tableData, years) {
     document.getElementById('mypForecastEmpty').style.display = 'none';
-    const netSurplus = summary.totalIncome - summary.totalExpense;
-    document.getElementById('mypSummaryCards').innerHTML = `
-      <div class="myp-stat-card"><div class="myp-stat-label">Total Income</div><div class="myp-stat-value" style="color:var(--green);">${formatMoney(summary.totalIncome)}</div></div>
-      <div class="myp-stat-card"><div class="myp-stat-label">Total Expense</div><div class="myp-stat-value" style="color:var(--red);">${formatMoney(summary.totalExpense)}</div></div>
-      <div class="myp-stat-card"><div class="myp-stat-label">Total Interest / Return</div><div class="myp-stat-value" style="color:var(--orange);">${formatMoney(summary.totalInterest)}</div></div>
-      <div class="myp-stat-card"><div class="myp-stat-label">Net Surplus</div><div class="myp-stat-value" style="color:${netSurplus>=0?'var(--green)':'var(--red)'};">${netSurplus<0?'-':''}${formatMoney(Math.abs(netSurplus))}</div></div>`;
+    const fm = n => (n < 0 ? '-' : '') + formatMoney(Math.abs(n));
+    const cashFlow = summary.totalIncome - summary.totalExpense;           // before returns
+    const netResult = cashFlow + summary.totalInterest;                    // after returns
+    const endBal = tableData.length ? tableData[tableData.length - 1].totalAllFunds : 0;
+    const endYr = years.length ? years[years.length - 1] : '';
+    const netCol = netResult >= 0 ? 'var(--green)' : 'var(--red)';
+    const card = (label, val, color, hint, extra) => `<div class="myp-stat-card"${extra || ''}><div class="myp-stat-label">${label}</div><div class="myp-stat-value" style="color:${color};">${val}</div><div class="myp-stat-hint">${hint}</div></div>`;
+    document.getElementById('mypSummaryCards').innerHTML =
+      card('Total Income', formatMoney(summary.totalIncome), 'var(--green)', 'Money coming in') +
+      card('+ Investment Return', '+' + formatMoney(summary.totalInterest), 'var(--blue)', 'Growth earned on your accounts') +
+      card('&minus; Total Expense', formatMoney(summary.totalExpense), 'var(--red)', 'Money going out') +
+      card('= Net Result <span class="myp-badge" style="background:' + netCol + ';">' + (netResult >= 0 ? 'Surplus' : 'Deficit') + '</span>', fm(netResult), netCol, 'Income + Return &minus; Expense', ' style="border:2px solid ' + netCol + ';"');
+    const gapYears = tableData.filter(d => (d.uncovered || 0) > 0.005);
+    if (gapYears.length) {
+      const totalGap = gapYears.reduce((t, d) => t + d.uncovered, 0);
+      const firstYr = gapYears[0].year, lastYr = gapYears[gapYears.length - 1].year;
+      const banner = document.createElement('div');
+      banner.className = 'myp-warn-banner';
+      banner.innerHTML = `<div class="myp-warn-title"><i class="fas fa-triangle-exclamation"></i> Accounts run out of money from ${firstYr}</div>` +
+        `<div>In <b>${gapYears.length}</b> year${gapYears.length > 1 ? 's' : ''} (${firstYr}${firstYr !== lastYr ? '&ndash;' + lastYr : ''}) expenses exceed income and every account is already at $0, so <b>${formatMoney(totalGap)}</b> of spending has <b>no funding source</b>. ` +
+        `Account balances stop at $0 (they never go negative), so the balances below look better than reality &mdash; treat this amount as money you would still need to find (savings, loans, or lower spending).</div>`;
+      document.getElementById('mypSummaryCards').appendChild(banner);
+    }
+    const note = document.createElement('div');
+    note.className = 'myp-summary-note';
+    note.innerHTML = `<b>How to read this:</b> Income &minus; Expense = <b style="color:${cashFlow >= 0 ? 'var(--green)' : 'var(--red)'};">${fm(cashFlow)}</b> (cash-flow gap before returns). Investment returns change it by <b style="color:var(--blue);">+${formatMoney(summary.totalInterest)}</b>, giving the Net Result above. Your accounts end ${endYr} at <b>${formatMoney(endBal)}</b>.`;
+    document.getElementById('mypSummaryCards').appendChild(note);
 
     const yearSelect = document.getElementById('mypSnapshotYear');
     yearSelect.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('');
@@ -1654,6 +1677,7 @@
         labels: years,
         datasets: [
           { label: 'Income', data: tableData.map(d => d.income), backgroundColor: incomeColor },
+          { label: 'Return', data: tableData.map(d => d.interest), backgroundColor: hexToRgba(rootStyle.getPropertyValue('--blue'), 0.75) },
           { label: 'Expense', data: tableData.map(d => d.expense), backgroundColor: expenseColor }
         ]
       },
@@ -1664,20 +1688,21 @@
       }
     });
 
-    let th = '<th>Year</th><th>Income</th><th>Expense</th><th>Net</th><th>Interest</th>';
+    let th = '<th>Year</th><th>Income</th><th>Expense</th><th title="Income − Expense, before returns">Cash Flow<div class="myp-th-sub">Inc − Exp</div></th><th title="Growth earned on account balances" style="color:var(--blue);">Return<div class="myp-th-sub">on accounts</div></th><th title="Income + Return − Expense">Net Result<div class="myp-th-sub">incl. Return</div></th>';
     funds.forEach(f => th += `<th>${escapeAttr(f.name || 'Unnamed account')}</th>`);
     th += '<th style="color:var(--blue);">Total All Accounts</th><th>Flows</th>';
     document.getElementById('mypForecastTableHead').innerHTML = th;
     document.getElementById('mypForecastTableBody').innerHTML = tableData.map(d => `
-      <tr>
+      <tr${(d.uncovered || 0) > 0.005 ? ' class="myp-gap-row"' : ''}>
         <td><b>${d.year}</b></td>
         <td style="color:var(--green);">${formatMoney(d.income)}${d.incomeDetail.length ? `<div style="font-size:11px;color:var(--muted);font-weight:400;margin-top:2px;">${d.incomeDetail.join('<br>')}</div>` : ''}</td>
         <td style="color:var(--red);">${formatMoney(d.expense)}${d.expenseDetail.length ? `<div style="font-size:11px;color:var(--muted);font-weight:400;margin-top:2px;">${d.expenseDetail.join('<br>')}</div>` : ''}</td>
         <td style="color:${d.balance >= 0 ? 'var(--green)' : 'var(--red)'};">${d.balance<0?'-':''}${formatMoney(Math.abs(d.balance))}</td>
-        <td style="color:var(--orange);">+${formatMoney(d.interest)}</td>
+        <td style="color:var(--blue);">+${formatMoney(d.interest)}</td>
+        <td style="font-weight:600;color:${(d.balance + d.interest) >= 0 ? 'var(--green)' : 'var(--red)'};">${(d.balance + d.interest)<0?'-':''}${formatMoney(Math.abs(d.balance + d.interest))}</td>
         ${funds.map(f => `<td>${formatMoney(d.fundBalances[f.id])}</td>`).join('')}
         <td style="font-weight:700;color:var(--blue);">${formatMoney(d.totalAllFunds)}</td>
-        <td style="font-size:11px;">${d.fundFlows.join('<br>')}</td>
+        <td style="font-size:11px;">${d.fundFlows.join('<br>')}${(d.uncovered || 0) > 0.005 ? `<div style="color:var(--red);font-weight:700;margin-top:2px;"><i class="fas fa-triangle-exclamation"></i> Unfunded: ${formatMoney(d.uncovered)}</div>` : ''}</td>
       </tr>`).join('');
   }
 
