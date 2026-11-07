@@ -7,8 +7,8 @@
   // Bump CACHE_VERSION in sw.js too when you bump this (they live in
   // different files and don't sync automatically) — sw.js has a matching
   // reminder comment pointing back here.
-  const APP_VERSION = 'v1.4.2';
-  const APP_VERSION_DATE = '2026-10-06';
+  const APP_VERSION = 'v1.4.3';
+  const APP_VERSION_DATE = '2026-11-07';
   document.getElementById('version-badge').textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
   // ========== DB SETUP ==========
