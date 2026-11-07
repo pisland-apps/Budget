@@ -188,6 +188,11 @@
   .myp-warn-banner { grid-column:1 / -1; font-size:12.5px; line-height:1.6; color:var(--text); background:color-mix(in srgb, var(--red) 12%, var(--card)); border:1px solid var(--red); border-left-width:5px; border-radius:10px; padding:10px 14px; }
   .myp-warn-title { font-weight:700; color:var(--red); font-size:14px; margin-bottom:3px; }
   tr.myp-gap-row td { background:color-mix(in srgb, var(--red) 8%, transparent); }
+  .myp-is-joint > :not(#mypJointPanel) { display:none !important; }
+  .myp-joint-box { background:var(--card); border:1px solid var(--border); border-left:5px solid var(--blue); border-radius:10px; padding:14px 16px; font-size:13.5px; line-height:1.6; }
+  .myp-joint-list { margin:0 0 12px 18px; padding:0; color:var(--muted); }
+  .myp-chip { display:inline-block; background:color-mix(in srgb, var(--blue) 14%, var(--card)); border:1px solid var(--blue); border-radius:20px; padding:1px 10px; font-weight:600; font-size:12.5px; }
+  .myp-combine-row { display:flex; align-items:center; gap:8px; padding:6px 0; cursor:pointer; }
   .myp-th-sub { font-size:10px; font-weight:400; color:var(--muted); }
   .hidden-btn { display:none !important; }
   .form-group { margin-bottom:14px; }
@@ -441,6 +446,7 @@
         <select id="mypPlanSelect" data-on-change="h14"></select>
       </div>
       <button class="btn btn-sm btn-outline" data-on-click="h15" title="New Plan"><i class="fas fa-plus"></i> New Plan</button>
+      <button class="btn btn-sm btn-outline" data-on-click="h94" title="Combine several plans into one joint plan with a shared pool"><i class="fas fa-link"></i> Combine Plans</button>
       <button class="btn btn-sm btn-outline" data-on-click="h16" title="Rename Plan"><i class="fas fa-pen"></i> Rename</button>
       <button class="btn btn-sm btn-danger" data-on-click="h17" title="Delete Plan"><i class="fas fa-trash"></i> Delete Plan</button>
     </div>
@@ -453,6 +459,7 @@
 
     <!-- SETUP sub-tab -->
     <div class="myp-subpanel active" id="myp-sub-setup">
+      <div id="mypJointPanel"></div>
 
       <div class="summary-title"><i class="fas fa-building-columns"></i> Accounts</div>
       <div style="overflow-x:auto;">
@@ -541,6 +548,23 @@
   </div>
   </div>
 
+</div>
+
+<!-- Combine plans modal -->
+<div class="modal-overlay" id="combine-modal">
+  <div class="modal">
+    <div class="modal-title" id="combine-modal-title">Create Joint Plan</div>
+    <div class="modal-body">
+      <div class="form-group"><label>Joint plan name</label><input type="text" id="combine-name" placeholder="e.g. Household"></div>
+      <label style="display:block;margin-bottom:6px;">Plans to pool together (select 2 or more)</label>
+      <div id="combine-modal-list"></div>
+      <div style="font-size:12px;color:var(--muted);margin-top:10px;">Pooled: all income and expenses are netted together, and any member's accounts can cover a shortfall. Your original plans are not changed.</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-on-click="h96">Cancel</button>
+      <button class="btn" data-on-click="h97">Save</button>
+    </div>
+  </div>
 </div>
 
 <!-- Import confirm modal -->

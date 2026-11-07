@@ -7,7 +7,7 @@
   // Bump CACHE_VERSION in sw.js too when you bump this (they live in
   // different files and don't sync automatically) — sw.js has a matching
   // reminder comment pointing back here.
-  const APP_VERSION = 'v1.3.1';
+  const APP_VERSION = 'v1.3.2';
   const APP_VERSION_DATE = '2026-10-06';
   document.getElementById('version-badge').textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
@@ -1211,7 +1211,7 @@
 
   function mypRenderPlanSelect(plans) {
     const select = document.getElementById('mypPlanSelect');
-    select.innerHTML = plans.map(p => `<option value="${p.id}">${escapeAttr(p.name || 'Unnamed plan')}</option>`).join('');
+    select.innerHTML = plans.map(p => `<option value="${p.id}">${escapeAttr(p.name || 'Unnamed plan')}${p.joint ? ' (Joint)' : ''}</option>`).join('');
     select.value = currentMypPlanId;
   }
 
@@ -1266,6 +1266,9 @@
 
     await db.mypActuals.where('planId').equals(currentMypPlanId).delete();
     await db.mypSavedForecasts.where('planId').equals(currentMypPlanId).delete();
+    for (const p of plans) {
+      if (p.joint && (p.memberIds || []).includes(currentMypPlanId)) await encUpdate('mypPlans', p.id, { memberIds: p.memberIds.filter(x => x !== currentMypPlanId) });
+    }
     await db.mypPlans.delete(currentMypPlanId);
 
     showToast('Plan deleted');
@@ -1277,6 +1280,7 @@
   }
 
   async function mypRenderAll() {
+    try { await mypRenderJointPanel(); } catch (e) { console.error('mypRenderJointPanel failed:', e); }
     await mypLoadFunds();
     await mypLoadRules();
     await mypLoadIncome();
@@ -1496,6 +1500,87 @@
     await mypLoadExpense();
   }
 
+  // ---------- Joint (combined) plans ----------
+  // A joint plan stores only { joint:true, memberIds:[planId,...] } — it has no
+  // data of its own. The forecast reads the members' accounts, rules, income
+  // and expenses live and runs them as ONE shared pool: all income and
+  // expenses are netted together, surpluses are split across every member's
+  // accounts by their allocation %, and a deficit is drawn from any account
+  // (lowest priority number first), so one member's account can cover
+  // another member's shortfall.
+  async function mypGetScope() {
+    const plans = await encGetAll('mypPlans');
+    const cur = plans.find(p => p.id === currentMypPlanId);
+    if (cur && cur.joint) {
+      const members = (cur.memberIds || []).map(id => plans.find(p => p.id === id)).filter(p => p && !p.joint);
+      const names = {};
+      members.forEach(m => { names[m.id] = m.name || 'Unnamed plan'; });
+      return { joint: true, plan: cur, members, ids: members.map(m => m.id), names };
+    }
+    return { joint: false, plan: cur, members: cur ? [cur] : [], ids: [currentMypPlanId], names: {} };
+  }
+
+  async function mypRenderJointPanel() {
+    const scope = await mypGetScope();
+    const setup = document.getElementById('myp-sub-setup');
+    const panel = document.getElementById('mypJointPanel');
+    if (!setup || !panel) return;
+    setup.classList.toggle('myp-is-joint', scope.joint);
+    if (!scope.joint) { panel.innerHTML = ''; return; }
+    const chips = scope.members.length
+      ? scope.members.map(m => `<span class="myp-chip">${escapeAttr(m.name || 'Unnamed plan')}</span>`).join(' + ')
+      : '<i>No member plans left &mdash; click Edit Members.</i>';
+    panel.innerHTML = `
+      <div class="myp-joint-box">
+        <div class="summary-title"><i class="fas fa-link"></i> Joint Plan &mdash; shared pool</div>
+        <div style="margin:6px 0 10px;">Combines: ${chips}</div>
+        <ul class="myp-joint-list">
+          <li><b>Income and expenses</b> of all member plans are added together each year.</li>
+          <li>A <b>surplus</b> is split across all member accounts by their allocation %.</li>
+          <li>A <b>deficit</b> is paid from any member's accounts (lowest priority number first), so one plan's accounts can cover another plan's shortfall.</li>
+          <li>Nothing is copied: edit data in the member plans, then press <b>Run Forecast</b> again here.</li>
+        </ul>
+        <button class="btn btn-sm btn-outline" data-on-click="h95"><i class="fas fa-users-gear"></i> Edit Members</button>
+        <button class="btn btn-sm" data-on-click="h19"><i class="fas fa-chart-column"></i> Go to Forecast</button>
+      </div>`;
+  }
+
+  let mypCombineEditingId = null;
+  async function mypOpenCombineModal(editing) {
+    const plans = (await encGetAll('mypPlans'));
+    const singles = plans.filter(p => !p.joint);
+    if (singles.length < 2) { showToast('You need at least 2 regular plans to combine'); return; }
+    mypCombineEditingId = editing ? currentMypPlanId : null;
+    const cur = editing ? plans.find(p => p.id === currentMypPlanId) : null;
+    const selected = cur ? (cur.memberIds || []) : [];
+    document.getElementById('combine-modal-title').textContent = editing ? 'Edit Joint Plan Members' : 'Create Joint Plan';
+    document.getElementById('combine-name').value = cur ? cur.name : 'Joint Plan';
+    document.getElementById('combine-modal-list').innerHTML = singles.map(p =>
+      `<label class="myp-combine-row"><input type="checkbox" class="combine-cb" value="${p.id}" ${selected.includes(p.id) ? 'checked' : ''}> ${escapeAttr(p.name || 'Unnamed plan')}</label>`).join('');
+    document.getElementById('combine-modal').classList.add('show');
+  }
+  function mypCloseCombineModal() { document.getElementById('combine-modal').classList.remove('show'); }
+
+  async function mypSaveCombine() {
+    const name = document.getElementById('combine-name').value.trim();
+    const ids = [...document.querySelectorAll('#combine-modal-list .combine-cb:checked')].map(c => parseInt(c.value));
+    if (!name) { showToast('Please name the joint plan'); return; }
+    if (ids.length < 2) { showToast('Select at least 2 plans to combine'); return; }
+    if (mypCombineEditingId != null) {
+      await encUpdate('mypPlans', mypCombineEditingId, { name, memberIds: ids });
+      mypCloseCombineModal();
+      mypRenderPlanSelect(await encGetAll('mypPlans'));
+      await mypSwitchPlan(mypCombineEditingId);
+      showToast('Members updated — run the forecast again');
+    } else {
+      const newId = await encAdd('mypPlans', { name, joint: true, memberIds: ids });
+      mypCloseCombineModal();
+      mypRenderPlanSelect(await encGetAll('mypPlans'));
+      await mypSwitchPlan(newId);
+      showToast('Joint plan created — go to Forecast and click Run');
+    }
+  }
+
   // ---------- Forecast Engine ----------
   // If the current plan has a saved forecast, restore it into view (so
   // switching plans never leaves the Forecast sub-tab stuck showing a
@@ -1528,11 +1613,20 @@
     const endYear = parseInt(document.getElementById('mypEndYear').value);
     if (!startYear || !endYear || endYear < startYear) { showToast('Please enter a valid year range'); return; }
 
-    const funds = (await encGetAll('mypFunds')).filter(f => f.planId === currentMypPlanId);
+    const scope = await mypGetScope();
+    if (scope.joint && !scope.ids.length) { showToast('This joint plan has no member plans — click Edit Members'); return; }
+    const inScope = pid => scope.ids.includes(pid);
+    // in a joint plan, prefix names with the owning plan so the table shows who each line belongs to
+    const label = (pid, name, fallback) => scope.joint ? `${scope.names[pid]} · ${name || fallback}` : name;
+    const byPlanOrder = (a, b) => scope.ids.indexOf(a.planId) - scope.ids.indexOf(b.planId);
+    const funds = (await encGetAll('mypFunds')).filter(f => inScope(f.planId)).sort(byPlanOrder)
+      .map(f => ({ ...f, name: label(f.planId, f.name, 'Unnamed account') }));
     const allRules = await encGetAll('mypFundRules');
-    const incomeCats = (await encGetAll('mypIncomeCategories')).filter(c => c.planId === currentMypPlanId);
+    const incomeCats = (await encGetAll('mypIncomeCategories')).filter(c => inScope(c.planId)).sort(byPlanOrder)
+      .map(c => ({ ...c, name: label(c.planId, c.name, 'Unnamed income') }));
     const allIncomeRanges = await encGetAll('mypIncomeRanges');
-    const expenseCats = (await encGetAll('mypExpenseCategories')).filter(c => c.planId === currentMypPlanId);
+    const expenseCats = (await encGetAll('mypExpenseCategories')).filter(c => inScope(c.planId)).sort(byPlanOrder)
+      .map(c => ({ ...c, name: label(c.planId, c.name, 'Unnamed expense') }));
     const allExpenseRanges = await encGetAll('mypExpenseRanges');
 
     let currentBalances = {};
@@ -2070,6 +2164,7 @@
     if (Array.isArray(d.mypPlans)) {
       const planIdMap = {}, fundIdMap = {}, incomeCatIdMap = {}, expenseCatIdMap = {}, baselineIdMap = {};
       for (const p of importRows(d.mypPlans)) { const { id, ...rest } = p; const n = put('mypPlans', rest); if (id != null) planIdMap[id] = n; }
+      (out.mypPlans || []).forEach(p => { if (Array.isArray(p.memberIds)) p.memberIds = p.memberIds.map(x => planIdMap[x]).filter(x => x != null); });
       for (const f of importRows(d.mypFunds)) { const { id, planId, ...rest } = f; const n = put('mypFunds', { ...rest, planId: fk(planIdMap, planId) }); if (id != null) fundIdMap[id] = n; }
       for (const r of importRows(d.mypFundRules)) { const { id, fundId, ...rest } = r; put('mypFundRules', { ...rest, fundId: fk(fundIdMap, fundId) }); }
       for (const c of importRows(d.mypIncomeCategories)) { const { id, planId, ...rest } = c; const n = put('mypIncomeCategories', { ...rest, planId: fk(planIdMap, planId) }); if (id != null) incomeCatIdMap[id] = n; }
@@ -2249,6 +2344,10 @@ const UI_HANDLERS = {
   h90: (el, event, a) => { addMypExpenseRange(a[0]); }, // click
   h91: (el, event, a) => { deleteMypExpenseCat(a[0]); }, // click
   h92: (el, event, a) => { mypDeleteBaseline(a[0]); }, // click
+  h94: (el, event, a) => { mypOpenCombineModal(false); }, // click
+  h95: (el, event, a) => { mypOpenCombineModal(true); }, // click
+  h96: (el, event, a) => { mypCloseCombineModal(); }, // click
+  h97: (el, event, a) => { mypSaveCombine(); }, // click
   h93: (el, event, a) => { mypSaveActualResult(a[0], el.value); }, // change
 };
 (function () {
