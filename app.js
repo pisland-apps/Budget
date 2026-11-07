@@ -7,7 +7,7 @@
   // Bump CACHE_VERSION in sw.js too when you bump this (they live in
   // different files and don't sync automatically) — sw.js has a matching
   // reminder comment pointing back here.
-  const APP_VERSION = 'v1.4.0';
+  const APP_VERSION = 'v1.4.1';
   const APP_VERSION_DATE = '2026-10-06';
   document.getElementById('version-badge').textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
@@ -1841,6 +1841,8 @@
     return '<td style="text-align:right;color:var(--muted);">&mdash;</td><td style="text-align:right;color:var(--muted);">&mdash;</td>';
   }
 
+  let mypVarianceBaselineId = null;   // which baseline the Variance columns compare against (null = earliest)
+
   async function mypRenderBaselineComparisonTable() {
     const headerRow = document.getElementById('mypBaselineTableHead');
     const tbody = document.getElementById('mypBaselineTableBody');
@@ -1849,7 +1851,7 @@
       tbody.innerHTML = '<tr><td class="empty-hint">Generate a forecast on the Forecast sub-tab first</td></tr>';
       return;
     }
-    const baselines = (await encGetAll('mypBaselines')).filter(b => b.planId === currentMypPlanId);
+    const baselines = (await encGetAll('mypBaselines')).filter(b => b.planId === currentMypPlanId).sort((a, b) => a.id - b.id);
     for (const b of baselines) {
       if (b.dateFmt) continue;
       const m = /^(.*\()(\d{1,2})\/(\d{1,2})\/(\d{4})(\))$/.exec(b.name || '');
@@ -1857,6 +1859,14 @@
       if (m) patch.name = `${m[1]}${m[3]}/${m[2]}/${m[4]}${m[5]}`;   // old names were M/D/YYYY
       await encUpdate('mypBaselines', b.id, patch);
       Object.assign(b, patch);
+    }
+    // Variance compares against the chosen baseline — by default the earliest one (the original plan)
+    const varBaseline = baselines.find(b => b.id === mypVarianceBaselineId) || baselines[0] || null;
+    const varWrap = document.getElementById('mypVarianceWrap');
+    if (varWrap) {
+      varWrap.style.display = baselines.length > 1 ? '' : 'none';
+      document.getElementById('mypVarianceSelect').innerHTML = baselines.map(b =>
+        `<option value="${b.id}" ${varBaseline && b.id === varBaseline.id ? 'selected' : ''}>${escapeAttr(b.name)}</option>`).join('');
     }
     const baselineValues = await encGetAll('mypBaselineValues');
     const actuals = (await encGetAll('mypActuals')).filter(a => a.planId === currentMypPlanId);
@@ -1872,7 +1882,7 @@
     baselines.forEach(b => {
       headHtml += `<th style="text-align:center;color:var(--blue);">${escapeAttr(b.name)} <button class="icon-btn" title="Delete baseline column" data-on-click="h92" data-a0="${b.id}">&times;</button></th>`;
     });
-    headHtml += '<th style="text-align:center;color:var(--green);">Actual (EOY)</th><th style="text-align:right;">Variance $</th><th style="text-align:right;">Variance %</th>';
+    headHtml += '<th style="text-align:center;color:var(--green);">Actual (EOY)</th><th style="text-align:right;">Variance $' + (varBaseline ? '<div class="myp-th-sub">vs ' + escapeAttr(varBaseline.name) + '</div>' : '') + '</th><th style="text-align:right;">Variance %</th>';
     headerRow.innerHTML = headHtml;
 
     // rows = every year with a live forecast, a frozen baseline value, or an actual
@@ -1887,15 +1897,15 @@
       const liveVal = liveRow ? liveRow.totalAllFunds : null;
       const actualRow = actualsByYear[yr];
       const actualVal = actualRow ? actualRow.amount : '';
-      let lastBaselineVal = liveVal;
+      let varBase = varBaseline ? null : liveVal;   // no baseline yet: compare with the live forecast
       let cols = `<td style="text-align:center;"><b>${yr}</b></td><td style="text-align:center;color:var(--orange);font-weight:600;">${liveVal == null ? '&mdash;' : formatMoney(liveVal)}</td>`;
       baselines.forEach(b => {
         const val = (baselineValMap[b.id] && baselineValMap[b.id][yr] != null) ? baselineValMap[b.id][yr] : null;
-        if (val != null) lastBaselineVal = val;
+        if (varBaseline && b.id === varBaseline.id) varBase = val;
         cols += `<td style="text-align:center;color:var(--blue);font-weight:600;">${val == null ? '<span style="color:var(--muted);">&mdash;</span>' : formatMoney(val)}</td>`;
       });
       cols += `<td style="text-align:center;">$ <input type="number" class="myp-actual-input" style="width:120px;display:inline-block;text-align:right;" value="${actualVal}" placeholder="Enter actual" autocomplete="off" data-on-change="h93" data-a0="${yr}"></td>`;
-      cols += mypVarianceCellsHtml(actualVal, lastBaselineVal);
+      cols += mypVarianceCellsHtml(actualVal, varBase);
       return `<tr>${cols}</tr>`;
     }).join('');
   }
@@ -1948,7 +1958,7 @@
   // ========== YEAR-END ROLLOVER ==========
   // Close the first forecast year with real account balances, then move the
   // forecast forward: opening balances := actual balances, Start Year := next year.
-  function mypOpenRollover() {
+  async function mypOpenRollover() {
     if (!mypForecastData.length || !mypForecastFundsList.length) { showToast('Run a forecast first'); return; }
     const closeYear = mypForecastData[0].year;
     const endYear = parseInt(document.getElementById('mypEndYear').value);
@@ -1964,7 +1974,11 @@
         return `<tr><td>${escapeAttr(f.name || 'Unnamed account')}</td><td style="text-align:right;color:var(--muted);">${formatMoney(fc)}</td>` +
           `<td style="text-align:right;"><input type="number" step="0.01" class="rollover-bal" data-fund="${f.id}" value="${fc}" style="width:150px;text-align:right;"></td></tr>`;
       }).join('') + '</tbody></table>';
-    document.getElementById('rollover-freeze').checked = true;
+    const hasBaseline = (await encGetAll('mypBaselines')).some(b => b.planId === currentMypPlanId);
+    document.getElementById('rollover-freeze').checked = !hasBaseline;
+    document.getElementById('rollover-freeze-text').textContent = hasBaseline
+      ? 'Also freeze this forecast as a new baseline (not needed every year — your earlier baseline already keeps the original plan)'
+      : 'Freeze the current forecast as a baseline first (recommended: this keeps your original plan to compare against)';
     document.getElementById('rollover-joint-note').style.display = (mypForecastFundsList.some(f => String(f.name).includes(' · '))) ? '' : 'none';
     document.getElementById('rollover-modal').classList.add('show');
   }
@@ -2420,6 +2434,7 @@ const UI_HANDLERS = {
   h98: (el, event, a) => { mypOpenRollover(); }, // click
   h99: (el, event, a) => { mypCloseRollover(); }, // click
   h100: (el, event, a) => { mypConfirmRollover(); }, // click
+  h101: (el, event, a) => { mypVarianceBaselineId = parseInt(el.value); mypRenderBaselineComparisonTable(); }, // change
   h93: (el, event, a) => { mypSaveActualResult(a[0], el.value); }, // change
 };
 (function () {

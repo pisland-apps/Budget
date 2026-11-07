@@ -540,6 +540,7 @@
       <div class="card-desc" style="margin-bottom:12px;">"Freeze" the currently-generated forecast into a named baseline column, then log real end-of-year totals in "Actual" as time passes to see how reality tracked against the plan.</div>
       <div class="toolbar" style="margin-bottom:14px;">
         <button class="btn btn-sm btn-outline" data-on-click="h27"><i class="fas fa-snowflake"></i> Freeze Current Forecast as Baseline</button>
+        <span id="mypVarianceWrap" style="display:none;align-items:center;gap:6px;margin-left:12px;font-size:13px;"><label style="margin:0;">Variance vs:</label> <select id="mypVarianceSelect" data-on-change="h101" style="width:auto;min-width:200px;"></select></span>
       </div>
       <div style="overflow-x:auto;">
         <table id="mypBaselineTable">
@@ -561,7 +562,7 @@
     <div class="modal-body">
       <div id="rollover-intro" style="margin-bottom:10px;"></div>
       <div id="rollover-list" style="max-height:50vh;overflow:auto;"></div>
-      <label class="myp-combine-row" style="margin-top:10px;"><input type="checkbox" id="rollover-freeze" checked> Freeze the current forecast as a baseline first (so you can compare plan vs actual later)</label>
+      <label class="myp-combine-row" style="margin-top:10px;"><input type="checkbox" id="rollover-freeze" checked> <span id="rollover-freeze-text">Freeze the current forecast as a baseline first</span></label>
       <div id="rollover-joint-note" style="display:none;font-size:12px;color:var(--orange);margin-top:6px;">Joint plan: the balances are written into each member plan's accounts. If you also open a member plan on its own, set its Start Year to the new year too.</div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px;">This overwrites each account's opening balance, records the total as Actual (EOY) for the closed year, and moves Start Year forward. Income and expense timelines are not changed.</div>
     </div>
