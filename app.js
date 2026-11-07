@@ -7,7 +7,7 @@
   // Bump CACHE_VERSION in sw.js too when you bump this (they live in
   // different files and don't sync automatically) — sw.js has a matching
   // reminder comment pointing back here.
-  const APP_VERSION = 'v1.4.1';
+  const APP_VERSION = 'v1.4.2';
   const APP_VERSION_DATE = '2026-10-06';
   document.getElementById('version-badge').textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
@@ -1830,13 +1830,13 @@
   }
 
   // ---------- Baseline vs. Actual ----------
-  function mypVarianceCellsHtml(actualVal, lastBaselineVal) {
+  function mypVarianceCellsHtml(actualVal, lastBaselineVal, note) {
     if (actualVal !== '' && actualVal != null && lastBaselineVal != null) {
       const diff = actualVal - lastBaselineVal;
       const pct = lastBaselineVal !== 0 ? ((diff / lastBaselineVal) * 100).toFixed(1) : '0.0';
       const color = diff > 0 ? 'var(--green)' : (diff < 0 ? 'var(--red)' : 'var(--muted)');
       const sign = diff > 0 ? '+' : (diff < 0 ? '-' : '');
-      return `<td style="text-align:right;color:${color};font-weight:600;">${sign}${formatMoney(Math.abs(diff))}</td><td style="text-align:right;color:${color};font-weight:600;">${sign}${Math.abs(pct)}%</td>`;
+      return `<td style="text-align:right;color:${color};font-weight:600;">${sign}${formatMoney(Math.abs(diff))}${note ? '<div class="myp-th-sub" title="This year is missing in the selected baseline, so the nearest earlier baseline with data is used">vs ' + escapeAttr(note) + '</div>' : ''}</td><td style="text-align:right;color:${color};font-weight:600;">${sign}${Math.abs(pct)}%</td>`;
     }
     return '<td style="text-align:right;color:var(--muted);">&mdash;</td><td style="text-align:right;color:var(--muted);">&mdash;</td>';
   }
@@ -1898,14 +1898,24 @@
       const actualRow = actualsByYear[yr];
       const actualVal = actualRow ? actualRow.amount : '';
       let varBase = varBaseline ? null : liveVal;   // no baseline yet: compare with the live forecast
+      const rowVals = [];
       let cols = `<td style="text-align:center;"><b>${yr}</b></td><td style="text-align:center;color:var(--orange);font-weight:600;">${liveVal == null ? '&mdash;' : formatMoney(liveVal)}</td>`;
       baselines.forEach(b => {
         const val = (baselineValMap[b.id] && baselineValMap[b.id][yr] != null) ? baselineValMap[b.id][yr] : null;
-        if (varBaseline && b.id === varBaseline.id) varBase = val;
+        rowVals.push(val);
         cols += `<td style="text-align:center;color:var(--blue);font-weight:600;">${val == null ? '<span style="color:var(--muted);">&mdash;</span>' : formatMoney(val)}</td>`;
       });
-      cols += `<td style="text-align:center;">$ <input type="number" class="myp-actual-input" style="width:120px;display:inline-block;text-align:right;" value="${actualVal}" placeholder="Enter actual" autocomplete="off" data-on-change="h93" data-a0="${yr}"></td>`;
-      cols += mypVarianceCellsHtml(actualVal, varBase);
+      cols += `<td style="text-align:center;"><input type="text" inputmode="decimal" class="myp-actual-input" style="width:160px;display:inline-block;text-align:right;" value="${actualVal === '' ? '' : moneyInputFormat(actualVal)}" placeholder="Enter actual" autocomplete="off" data-on-focus="h41" data-on-blur="h102" data-on-change="h93" data-a0="${yr}"></td>`;
+      let varNote = '';
+      if (varBaseline) {
+        // chosen baseline first; if it has nothing for this year, fall back to the nearest earlier baseline that does
+        const si = baselines.findIndex(b => b.id === varBaseline.id);
+        let pick = -1;
+        for (let i = si; i >= 0 && pick < 0; i--) if (rowVals[i] != null) pick = i;
+        for (let i = si + 1; i < baselines.length && pick < 0; i++) if (rowVals[i] != null) pick = i;
+        if (pick >= 0) { varBase = rowVals[pick]; if (pick !== si) varNote = baselines[pick].name; }
+      }
+      cols += mypVarianceCellsHtml(actualVal, varBase, varNote);
       return `<tr>${cols}</tr>`;
     }).join('');
   }
@@ -2435,7 +2445,8 @@ const UI_HANDLERS = {
   h99: (el, event, a) => { mypCloseRollover(); }, // click
   h100: (el, event, a) => { mypConfirmRollover(); }, // click
   h101: (el, event, a) => { mypVarianceBaselineId = parseInt(el.value); mypRenderBaselineComparisonTable(); }, // change
-  h93: (el, event, a) => { mypSaveActualResult(a[0], el.value); }, // change
+  h93: (el, event, a) => { mypSaveActualResult(a[0], el.value.trim() === '' ? '' : moneyInputParse(el.value)); }, // change
+  h102: (el, event, a) => { if (el.value.trim() !== '') moneyFieldBlur(el); }, // blur
 };
 (function () {
   const types = { click: 'click', input: 'input', change: 'change', keydown: 'keydown', focus: 'focusin', blur: 'focusout' };
