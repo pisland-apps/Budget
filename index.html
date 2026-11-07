@@ -513,6 +513,7 @@
         <div class="form-group" style="margin-bottom:0;"><label>Start Year</label><input type="number" id="mypStartYear" style="width:110px;"></div>
         <div class="form-group" style="margin-bottom:0;"><label>End Year</label><input type="number" id="mypEndYear" style="width:110px;"></div>
         <button class="btn" data-on-click="h25"><i class="fas fa-play"></i> Run Forecast</button>
+        <button class="btn btn-outline" data-on-click="h98" title="Close the first forecast year with real balances and move the forecast forward"><i class="fas fa-flag-checkered"></i> Year-End Rollover</button>
       </div>
 
       <div class="summary-grid" id="mypSummaryCards" style="margin-bottom:20px;"></div>
@@ -551,6 +552,24 @@
   </div>
   </div>
 
+</div>
+
+<!-- Year-end rollover modal -->
+<div class="modal-overlay" id="rollover-modal">
+  <div class="modal" style="max-width:640px;">
+    <div class="modal-title" id="rollover-title">Year-End Rollover</div>
+    <div class="modal-body">
+      <div id="rollover-intro" style="margin-bottom:10px;"></div>
+      <div id="rollover-list" style="max-height:50vh;overflow:auto;"></div>
+      <label class="myp-combine-row" style="margin-top:10px;"><input type="checkbox" id="rollover-freeze" checked> Freeze the current forecast as a baseline first (so you can compare plan vs actual later)</label>
+      <div id="rollover-joint-note" style="display:none;font-size:12px;color:var(--orange);margin-top:6px;">Joint plan: the balances are written into each member plan's accounts. If you also open a member plan on its own, set its Start Year to the new year too.</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px;">This overwrites each account's opening balance, records the total as Actual (EOY) for the closed year, and moves Start Year forward. Income and expense timelines are not changed.</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-on-click="h99">Cancel</button>
+      <button class="btn" data-on-click="h100">Close Year &amp; Roll Forward</button>
+    </div>
+  </div>
 </div>
 
 <!-- Combine plans modal -->

@@ -7,7 +7,7 @@
   // Bump CACHE_VERSION in sw.js too when you bump this (they live in
   // different files and don't sync automatically) — sw.js has a matching
   // reminder comment pointing back here.
-  const APP_VERSION = 'v1.3.4';
+  const APP_VERSION = 'v1.4.0';
   const APP_VERSION_DATE = '2026-10-06';
   document.getElementById('version-badge').textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
@@ -1831,7 +1831,7 @@
 
   // ---------- Baseline vs. Actual ----------
   function mypVarianceCellsHtml(actualVal, lastBaselineVal) {
-    if (actualVal !== '' && actualVal != null) {
+    if (actualVal !== '' && actualVal != null && lastBaselineVal != null) {
       const diff = actualVal - lastBaselineVal;
       const pct = lastBaselineVal !== 0 ? ((diff / lastBaselineVal) * 100).toFixed(1) : '0.0';
       const color = diff > 0 ? 'var(--green)' : (diff < 0 ? 'var(--red)' : 'var(--muted)');
@@ -1875,22 +1875,37 @@
     headHtml += '<th style="text-align:center;color:var(--green);">Actual (EOY)</th><th style="text-align:right;">Variance $</th><th style="text-align:right;">Variance %</th>';
     headerRow.innerHTML = headHtml;
 
-    tbody.innerHTML = mypForecastData.map(row => {
-      const yr = row.year;
-      const liveVal = row.totalAllFunds;
+    // rows = every year with a live forecast, a frozen baseline value, or an actual
+    // (so a year closed by Year-End Rollover stays visible after the forecast moves on)
+    const liveByYear = {}; mypForecastData.forEach(r => { liveByYear[r.year] = r; });
+    const yearSet = new Set(mypForecastData.map(r => r.year));
+    actuals.forEach(a => yearSet.add(a.year));
+    baselines.forEach(b => Object.keys(baselineValMap[b.id] || {}).forEach(y => yearSet.add(Number(y))));
+    const allYears = [...yearSet].sort((a, b) => a - b);
+    tbody.innerHTML = allYears.map(yr => {
+      const liveRow = liveByYear[yr];
+      const liveVal = liveRow ? liveRow.totalAllFunds : null;
       const actualRow = actualsByYear[yr];
       const actualVal = actualRow ? actualRow.amount : '';
       let lastBaselineVal = liveVal;
-      let cols = `<td style="text-align:center;"><b>${yr}</b></td><td style="text-align:center;color:var(--orange);font-weight:600;">${formatMoney(liveVal)}</td>`;
+      let cols = `<td style="text-align:center;"><b>${yr}</b></td><td style="text-align:center;color:var(--orange);font-weight:600;">${liveVal == null ? '&mdash;' : formatMoney(liveVal)}</td>`;
       baselines.forEach(b => {
-        const val = (baselineValMap[b.id] && baselineValMap[b.id][yr] != null) ? baselineValMap[b.id][yr] : 0;
-        lastBaselineVal = val;
-        cols += `<td style="text-align:center;color:var(--blue);font-weight:600;">${formatMoney(val)}</td>`;
+        const val = (baselineValMap[b.id] && baselineValMap[b.id][yr] != null) ? baselineValMap[b.id][yr] : null;
+        if (val != null) lastBaselineVal = val;
+        cols += `<td style="text-align:center;color:var(--blue);font-weight:600;">${val == null ? '<span style="color:var(--muted);">&mdash;</span>' : formatMoney(val)}</td>`;
       });
       cols += `<td style="text-align:center;">$ <input type="number" class="myp-actual-input" style="width:120px;display:inline-block;text-align:right;" value="${actualVal}" placeholder="Enter actual" autocomplete="off" data-on-change="h93" data-a0="${yr}"></td>`;
       cols += mypVarianceCellsHtml(actualVal, lastBaselineVal);
       return `<tr>${cols}</tr>`;
     }).join('');
+  }
+
+  async function mypCreateBaseline(colName) {
+    const baselineId = await encAdd('mypBaselines', { name: colName, planId: currentMypPlanId, dateFmt: 1 });
+    for (const d of mypForecastData) {
+      await encAdd('mypBaselineValues', { baselineId, year: d.year, amount: d.totalAllFunds });
+    }
+    return baselineId;
   }
 
   async function mypFreezeBaseline() {
@@ -1900,10 +1915,7 @@
     const defaultName = `Baseline ${count + 1} (${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()})`;
     const colName = prompt('Name this baseline column:', defaultName);
     if (!colName) return;
-    const baselineId = await encAdd('mypBaselines', { name: colName, planId: currentMypPlanId, dateFmt: 1 });
-    for (const d of mypForecastData) {
-      await encAdd('mypBaselineValues', { baselineId, year: d.year, amount: d.totalAllFunds });
-    }
+    await mypCreateBaseline(colName);
     showToast('Baseline frozen!');
     await mypRenderBaselineComparisonTable();
   }
@@ -1931,6 +1943,52 @@
 
   function escapeAttr(str) {
     return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ========== YEAR-END ROLLOVER ==========
+  // Close the first forecast year with real account balances, then move the
+  // forecast forward: opening balances := actual balances, Start Year := next year.
+  function mypOpenRollover() {
+    if (!mypForecastData.length || !mypForecastFundsList.length) { showToast('Run a forecast first'); return; }
+    const closeYear = mypForecastData[0].year;
+    const endYear = parseInt(document.getElementById('mypEndYear').value);
+    if (closeYear + 1 > endYear) { showToast('End Year must be later than ' + closeYear + ' — raise End Year first'); return; }
+    const row = mypForecastData[0];
+    document.getElementById('rollover-title').textContent = 'Year-End Rollover: close ' + closeYear;
+    document.getElementById('rollover-intro').innerHTML =
+      `Enter each account's <b>actual balance at the end of ${closeYear}</b>. The forecast will restart from <b>${closeYear + 1}</b> using these balances.`;
+    document.getElementById('rollover-list').innerHTML =
+      '<table><thead><tr><th>Account</th><th style="text-align:right;">Forecast ' + closeYear + '</th><th style="text-align:right;">Actual ' + closeYear + '</th></tr></thead><tbody>' +
+      mypForecastFundsList.map(f => {
+        const fc = Math.round((row.fundBalances[f.id] || 0) * 100) / 100;
+        return `<tr><td>${escapeAttr(f.name || 'Unnamed account')}</td><td style="text-align:right;color:var(--muted);">${formatMoney(fc)}</td>` +
+          `<td style="text-align:right;"><input type="number" step="0.01" class="rollover-bal" data-fund="${f.id}" value="${fc}" style="width:150px;text-align:right;"></td></tr>`;
+      }).join('') + '</tbody></table>';
+    document.getElementById('rollover-freeze').checked = true;
+    document.getElementById('rollover-joint-note').style.display = (mypForecastFundsList.some(f => String(f.name).includes(' · '))) ? '' : 'none';
+    document.getElementById('rollover-modal').classList.add('show');
+  }
+  function mypCloseRollover() { document.getElementById('rollover-modal').classList.remove('show'); }
+
+  async function mypConfirmRollover() {
+    const closeYear = mypForecastData[0].year;
+    const inputs = [...document.querySelectorAll('#rollover-list .rollover-bal')];
+    const entries = inputs.map(i => ({ id: parseInt(i.dataset.fund), val: parseFloat(i.value) }));
+    if (entries.some(e => !isFinite(e.val))) { showToast('Please fill in every account balance'); return; }
+    const total = entries.reduce((t, e) => t + e.val, 0);
+    if (!confirm(`Close ${closeYear} with a total balance of ${formatMoney(total)}?\n\nAccount opening balances will be overwritten and the forecast will start from ${closeYear + 1}.`)) return;
+    mypCloseRollover();
+    if (document.getElementById('rollover-freeze').checked) {
+      const n = (await encGetAll('mypBaselines')).filter(b => b.planId === currentMypPlanId).length;
+      const now = new Date();
+      await mypCreateBaseline(`Baseline ${n + 1} (${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()})`);
+    }
+    await mypSaveActualResult(closeYear, total);                      // Actual (EOY) for the closed year
+    for (const e of entries) await encUpdate('mypFunds', e.id, { initialAmount: e.val });
+    document.getElementById('mypStartYear').value = closeYear + 1;
+    await mypLoadFunds();
+    await mypRunForecast();
+    showToast(`${closeYear} closed — forecast now starts ${closeYear + 1}`);
   }
 
   // ========== EXPORT / IMPORT ==========
@@ -2359,6 +2417,9 @@ const UI_HANDLERS = {
   h95: (el, event, a) => { mypOpenCombineModal(true); }, // click
   h96: (el, event, a) => { mypCloseCombineModal(); }, // click
   h97: (el, event, a) => { mypSaveCombine(); }, // click
+  h98: (el, event, a) => { mypOpenRollover(); }, // click
+  h99: (el, event, a) => { mypCloseRollover(); }, // click
+  h100: (el, event, a) => { mypConfirmRollover(); }, // click
   h93: (el, event, a) => { mypSaveActualResult(a[0], el.value); }, // change
 };
 (function () {
