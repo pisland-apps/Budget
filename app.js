@@ -7,7 +7,7 @@
   // Bump CACHE_VERSION in sw.js too when you bump this (they live in
   // different files and don't sync automatically) — sw.js has a matching
   // reminder comment pointing back here.
-  const APP_VERSION = 'v1.3.2';
+  const APP_VERSION = 'v1.3.3';
   const APP_VERSION_DATE = '2026-10-06';
   document.getElementById('version-badge').textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
@@ -603,6 +603,8 @@
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('tab-' + tab).classList.add('active');
     document.getElementById('tabbtn-' + tab).classList.add('active');
+    // wide data tables (forecasts) get a wider page on large screens
+    document.querySelector('.container').classList.toggle('wide', tab === 'myp' || tab === 'forecast');
   }
 
   // ========== HELPERS ==========
