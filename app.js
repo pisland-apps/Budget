@@ -7,7 +7,7 @@
   // Bump CACHE_VERSION in sw.js too when you bump this (they live in
   // different files and don't sync automatically) — sw.js has a matching
   // reminder comment pointing back here.
-  const APP_VERSION = 'v1.3.3';
+  const APP_VERSION = 'v1.3.4';
   const APP_VERSION_DATE = '2026-10-06';
   document.getElementById('version-badge').textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
@@ -1850,6 +1850,14 @@
       return;
     }
     const baselines = (await encGetAll('mypBaselines')).filter(b => b.planId === currentMypPlanId);
+    for (const b of baselines) {
+      if (b.dateFmt) continue;
+      const m = /^(.*\()(\d{1,2})\/(\d{1,2})\/(\d{4})(\))$/.exec(b.name || '');
+      const patch = { dateFmt: 1 };
+      if (m) patch.name = `${m[1]}${m[3]}/${m[2]}/${m[4]}${m[5]}`;   // old names were M/D/YYYY
+      await encUpdate('mypBaselines', b.id, patch);
+      Object.assign(b, patch);
+    }
     const baselineValues = await encGetAll('mypBaselineValues');
     const actuals = (await encGetAll('mypActuals')).filter(a => a.planId === currentMypPlanId);
 
@@ -1888,10 +1896,11 @@
   async function mypFreezeBaseline() {
     if (!mypForecastData.length) { showToast('Generate a forecast first'); return; }
     const count = (await encGetAll('mypBaselines')).filter(b => b.planId === currentMypPlanId).length;
-    const defaultName = `Baseline ${count + 1} (${new Date().toLocaleDateString()})`;
+    const now = new Date();
+    const defaultName = `Baseline ${count + 1} (${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()})`;
     const colName = prompt('Name this baseline column:', defaultName);
     if (!colName) return;
-    const baselineId = await encAdd('mypBaselines', { name: colName, planId: currentMypPlanId });
+    const baselineId = await encAdd('mypBaselines', { name: colName, planId: currentMypPlanId, dateFmt: 1 });
     for (const d of mypForecastData) {
       await encAdd('mypBaselineValues', { baselineId, year: d.year, amount: d.totalAllFunds });
     }
